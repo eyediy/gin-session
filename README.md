@@ -1,2 +1,2 @@
 # gin-session
-session middleware for gin.
+session middleware for gin. use redis as data store.

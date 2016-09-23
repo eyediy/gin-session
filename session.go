@@ -1,17 +1,15 @@
 package ginsession
 
 import (
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	redis "gopkg.in/redis.v4"
 
-	guid "github.com/bsm/go-guid"
 	"github.com/gin-gonic/gin"
+	"github.com/gokyle/uuid"
 	"github.com/magiconair/properties"
 )
 
@@ -40,26 +38,47 @@ type SessionManager struct {
 	client *redis.Client
 }
 
+func (manager *SessionManager) sessionKey(sid string) string {
+	return manager.cookieName + ":" + sid
+}
+
 // Save save session to store
 func (manager *SessionManager) Save(session *Session) error {
-
-	return errors.New("Failed to save session")
+	var (
+		err   error
+		bytes []byte
+	)
+	bytes, err = json.Marshal(session.Data)
+	if err != nil {
+		return err
+	}
+	statusCmd := manager.client.Set(manager.sessionKey(session.ID), string(bytes), time.Duration(manager.maxAge)*time.Second)
+	if statusCmd.Err() != nil {
+		return statusCmd.Err()
+	}
+	return nil
 }
 
 // GetSession get or generate a new session
 func (manager *SessionManager) GetSession(sid string) *Session {
+	var (
+		err error
+	)
 	session := &Session{"", make(map[string]interface{}), manager}
-	strCmd := manager.client.Get(sid)
-	log.Fatal(strCmd)
+	strCmd := manager.client.Get(manager.sessionKey(sid))
 	if strCmd.Err() == nil {
-		err := json.Unmarshal([]byte(strCmd.Val()), &session.Data)
+		err = json.Unmarshal([]byte(strCmd.Val()), &session.Data)
 		if err != nil {
 			session.ID = sid
 			return session
 		}
 	}
-	g2 := guid.New128()
-	session.ID = hex.EncodeToString(g2.Bytes())
+	//session.ID = betterguid.New()
+	session.ID, err = uuid.GenerateV4String()
+	if err != nil {
+		session.ID = ""
+		log.Print(err)
+	}
 	return session
 }
 
@@ -93,7 +112,7 @@ func NewSessionManager(propfile string) *SessionManager {
 	})
 	_, err := sessionManager.client.Ping().Result()
 	if err != nil {
-		panic(err)
+		log.Panic(err)
 	}
 
 	return sessionManager

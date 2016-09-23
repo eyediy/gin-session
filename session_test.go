@@ -66,3 +66,12 @@ func Test_getSession(t *testing.T) {
 	session := sessionManager.GetSession("jkkaa")
 	t.Log(session.ID)
 }
+
+func Test_saveSession(t *testing.T) {
+	session := sessionManager.GetSession("aaa")
+	t.Log(session.ID)
+	err := session.Save()
+	if err != nil {
+		t.Error(err)
+	}
+}
