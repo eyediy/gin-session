@@ -75,3 +75,25 @@ func Test_saveSession(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func Test_completeFlow(t *testing.T) {
+	session := sessionManager.GetSession("aaa")
+	t.Log(session.ID)
+	err := session.Save()
+	if err != nil {
+		t.Error(err)
+	}
+	// retrieve the session
+	newSession := sessionManager.GetSession(session.ID)
+	t.Log(newSession)
+	// bind some data
+	newSession.Data["signed"] = true
+	newSession.Data["userId"] = 558
+	err = newSession.Save()
+	if err != nil {
+		t.Error(err)
+	}
+	// retrieve again
+	newSession = sessionManager.GetSession(session.ID)
+	t.Log(newSession)
+}

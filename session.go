@@ -34,12 +34,14 @@ type SessionManager struct {
 	domain     string
 	secure     bool
 	httpOnly   bool
+	// key prefix used in store
+	keyPrefix string
 	// redis
 	client *redis.Client
 }
 
 func (manager *SessionManager) sessionKey(sid string) string {
-	return manager.cookieName + ":" + sid
+	return manager.keyPrefix + ":" + sid
 }
 
 // Save save session to store
@@ -68,7 +70,7 @@ func (manager *SessionManager) GetSession(sid string) *Session {
 	strCmd := manager.client.Get(manager.sessionKey(sid))
 	if strCmd.Err() == nil {
 		err = json.Unmarshal([]byte(strCmd.Val()), &session.Data)
-		if err != nil {
+		if err == nil {
 			session.ID = sid
 			return session
 		}
@@ -95,8 +97,9 @@ func NewSessionManager(propfile string) *SessionManager {
 	sessionManager.domain = p.GetString("session.domain", "")
 	sessionManager.secure = p.GetBool("session.secure", false)
 	sessionManager.httpOnly = p.GetBool("session.httpOnly", false)
+	sessionManager.keyPrefix = p.GetString("session.keyPrefix", sessionManager.cookieName)
 
-	// load redis config
+	// load storage config
 	host := p.GetString("session.store.host", "")
 	port := p.GetInt("session.store.port", 6379)
 	pass := p.GetString("session.store.pass", "")
