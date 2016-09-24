@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"net/url"
 	"time"
 
 	redis "gopkg.in/redis.v4"
@@ -23,6 +25,7 @@ type SessionData struct {
 type Session struct {
 	ID      string
 	Data    SessionData
+	Valid   bool
 	manager *SessionManager
 }
 
@@ -71,13 +74,13 @@ func (session *Session) ShouldUpdate(oldSession *Session) bool {
 // SessionManager use to manage sessions
 type SessionManager struct {
 	// cookie
-	cookieName      string
-	maxAge          int
-	maxAgeTolerance int
-	path            string
-	domain          string
-	secure          bool
-	httpOnly        bool
+	cookieName           string
+	maxAge               int
+	maxAgeUpdateInterval int
+	path                 string
+	domain               string
+	secure               bool
+	httpOnly             bool
 	// key prefix used in store
 	keyPrefix string
 	// redis
@@ -93,11 +96,29 @@ func (manager *SessionManager) sessionKey(sid string) string {
 // return true if time.Now().UnixNano() - session.Data.LastUpdate > maxAge
 func (manager *SessionManager) shouldUpdate(session *Session) bool {
 	tElapsed := time.Now().UnixNano() - session.Data.LastUpdate
-	maxAgeTolerance := time.Duration(manager.maxAge-manager.maxAgeTolerance) * time.Second
-	if tElapsed > int64(maxAgeTolerance) {
+	maxAgeUpdateInterval := time.Duration(manager.maxAgeUpdateInterval) * time.Second
+	if tElapsed >= int64(maxAgeUpdateInterval) {
 		return true
 	}
 	return false
+}
+
+// SaveCookie save cookie to client
+func (manager *SessionManager) SaveCookie(session *Session, c *gin.Context) {
+	if manager.domain == "" {
+		manager.domain = c.Request.Host
+	}
+	cookie := &http.Cookie{
+		Name:     manager.cookieName,
+		Value:    url.QueryEscape(session.ID),
+		MaxAge:   manager.maxAge,
+		Path:     manager.path,
+		Domain:   manager.domain,
+		Secure:   manager.secure,
+		HttpOnly: manager.httpOnly,
+	}
+	//log.Println(cookie.String())
+	http.SetCookie(c.Writer, cookie)
 }
 
 // Save save session to store
@@ -106,11 +127,10 @@ func (manager *SessionManager) Save(session *Session) error {
 		err   error
 		bytes []byte
 	)
-	bytes, err = json.Marshal(session.Data)
+	bytes, err = json.Marshal(&session.Data)
 	if err != nil {
 		return err
 	}
-	session.Update()
 	statusCmd := manager.client.Set(manager.sessionKey(session.ID), string(bytes), time.Duration(manager.maxAge)*time.Second)
 	if statusCmd.Err() != nil {
 		return statusCmd.Err()
@@ -129,20 +149,25 @@ func (manager *SessionManager) GetSession(sid string) *Session {
 			time.Now().UnixNano(),
 			make(map[string]interface{}),
 		},
+		false,
 		manager}
 	strCmd := manager.client.Get(manager.sessionKey(sid))
 	if strCmd.Err() == nil {
 		err = json.Unmarshal([]byte(strCmd.Val()), &session.Data)
 		if err == nil {
 			session.ID = sid
+			session.Valid = true
 			return session
 		}
 	}
-	//session.ID = betterguid.New()
-	session.ID, err = uuid.GenerateV4String()
-	if err != nil {
-		session.ID = ""
-		log.Print(err)
+	// generate new session id
+	if session.ID == "" {
+		//session.ID = betterguid.New()
+		session.ID, err = uuid.GenerateV4String()
+		if err != nil {
+			session.ID = ""
+			log.Print(err)
+		}
 	}
 	return session
 }
@@ -156,7 +181,7 @@ func NewSessionManager(propfile string) *SessionManager {
 	// load session config
 	sessionManager.cookieName = p.GetString("session.cookieName", "gin-session")
 	sessionManager.maxAge = p.GetInt("session.maxAge", 0)
-	sessionManager.maxAgeTolerance = p.GetInt("session.maxAgeTolerance", 0)
+	sessionManager.maxAgeUpdateInterval = p.GetInt("session.maxAgeUpdateInterval", 0)
 	sessionManager.path = p.GetString("session.path", "/")
 	sessionManager.domain = p.GetString("session.domain", "")
 	sessionManager.secure = p.GetBool("session.secure", false)
@@ -171,7 +196,7 @@ func NewSessionManager(propfile string) *SessionManager {
 
 	// create redis client
 	addr := fmt.Sprintf("%s:%d", host, port)
-	log.Println(addr)
+	//log.Println(addr)
 	sessionManager.client = redis.NewClient(&redis.Options{
 		Addr:     addr,
 		Password: pass,
@@ -203,6 +228,9 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 			c.Set("session", session)
 		}
 
+		// update cookie
+		sessionManager.SaveCookie(session, c)
+
 		// save a copy of session
 		oldSession := session.Copy()
 		if oldSession == nil {
@@ -213,6 +241,8 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 
 		// save session
 		if session.ShouldUpdate(oldSession) {
+			log.Println("update")
+			session.Update() // keepalive
 			session.Save()
 		}
 	}
