@@ -13,11 +13,38 @@ import (
 	"github.com/magiconair/properties"
 )
 
+// SessionData .
+type SessionData struct {
+	LastUpdate int64
+	Value      map[string]interface{}
+}
+
 // Session defines common session info
 type Session struct {
 	ID      string
-	Data    map[string]interface{}
+	Data    SessionData
 	manager *SessionManager
+}
+
+// Copy copy a session instance
+// return *Session if succeed
+// return nil otherwise
+func (session *Session) Copy() *Session {
+	newSession := new(Session)
+	// ID
+	newSession.ID = session.ID
+	// Data
+	bytes, err := json.Marshal(&session.Data)
+	if err != nil {
+		return nil
+	}
+	err = json.Unmarshal(bytes, &newSession.Data)
+	if err != nil {
+		return nil
+	}
+	// manager
+	newSession.manager = session.manager
+	return newSession
 }
 
 // Save save session to store
@@ -25,23 +52,52 @@ func (session *Session) Save() error {
 	return session.manager.Save(session)
 }
 
+// Update force the update the session state
+func (session *Session) Update() {
+	session.Data.LastUpdate = time.Now().UnixNano()
+}
+
+// ShouldUpdate .
+// check session state
+// return true if session.Data.LastUpdate had been modified
+// return true if elapsed time is as long as maxAge-maxAgeTolerance
+func (session *Session) ShouldUpdate(oldSession *Session) bool {
+	if session.Data.LastUpdate != oldSession.Data.LastUpdate {
+		return true
+	}
+	return session.manager.shouldUpdate(session)
+}
+
 // SessionManager use to manage sessions
 type SessionManager struct {
 	// cookie
-	cookieName string
-	maxAge     int
-	path       string
-	domain     string
-	secure     bool
-	httpOnly   bool
+	cookieName      string
+	maxAge          int
+	maxAgeTolerance int
+	path            string
+	domain          string
+	secure          bool
+	httpOnly        bool
 	// key prefix used in store
 	keyPrefix string
 	// redis
 	client *redis.Client
 }
 
+// sessionKey
 func (manager *SessionManager) sessionKey(sid string) string {
 	return manager.keyPrefix + ":" + sid
+}
+
+// shouldUpdate .
+// return true if time.Now().UnixNano() - session.Data.LastUpdate > maxAge
+func (manager *SessionManager) shouldUpdate(session *Session) bool {
+	tElapsed := time.Now().UnixNano() - session.Data.LastUpdate
+	maxAgeTolerance := time.Duration(manager.maxAge-manager.maxAgeTolerance) * time.Second
+	if tElapsed > int64(maxAgeTolerance) {
+		return true
+	}
+	return false
 }
 
 // Save save session to store
@@ -54,6 +110,7 @@ func (manager *SessionManager) Save(session *Session) error {
 	if err != nil {
 		return err
 	}
+	session.Update()
 	statusCmd := manager.client.Set(manager.sessionKey(session.ID), string(bytes), time.Duration(manager.maxAge)*time.Second)
 	if statusCmd.Err() != nil {
 		return statusCmd.Err()
@@ -66,7 +123,13 @@ func (manager *SessionManager) GetSession(sid string) *Session {
 	var (
 		err error
 	)
-	session := &Session{"", make(map[string]interface{}), manager}
+	session := &Session{
+		"",
+		SessionData{
+			time.Now().UnixNano(),
+			make(map[string]interface{}),
+		},
+		manager}
 	strCmd := manager.client.Get(manager.sessionKey(sid))
 	if strCmd.Err() == nil {
 		err = json.Unmarshal([]byte(strCmd.Val()), &session.Data)
@@ -93,6 +156,7 @@ func NewSessionManager(propfile string) *SessionManager {
 	// load session config
 	sessionManager.cookieName = p.GetString("session.cookieName", "gin-session")
 	sessionManager.maxAge = p.GetInt("session.maxAge", 0)
+	sessionManager.maxAgeTolerance = p.GetInt("session.maxAgeTolerance", 0)
 	sessionManager.path = p.GetString("session.path", "/")
 	sessionManager.domain = p.GetString("session.domain", "")
 	sessionManager.secure = p.GetBool("session.secure", false)
@@ -128,12 +192,8 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 	sessionManager := NewSessionManager(propfile)
 
 	return func(c *gin.Context) {
-		t := time.Now()
 
-		// Set example variable
-		c.Set("session", "12345")
-
-		// before request
+		// create session
 		sid, err := c.Cookie(sessionManager.cookieName)
 		if err != nil {
 			log.Println(err)
@@ -143,14 +203,17 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 			c.Set("session", session)
 		}
 
+		// save a copy of session
+		oldSession := session.Copy()
+		if oldSession == nil {
+			log.Println("[gin-session]: session.Copy() failed")
+		}
+
 		c.Next()
 
-		// after request
-		latency := time.Since(t)
-		log.Print(latency)
-
-		// access the status we are sending
-		status := c.Writer.Status()
-		log.Println(status)
+		// save session
+		if session.ShouldUpdate(oldSession) {
+			session.Save()
+		}
 	}
 }

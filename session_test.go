@@ -3,6 +3,7 @@ package ginsession_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	ginsession "github.com/eyediy/gin-session"
 )
@@ -87,13 +88,73 @@ func Test_completeFlow(t *testing.T) {
 	newSession := sessionManager.GetSession(session.ID)
 	t.Log(newSession)
 	// bind some data
-	newSession.Data["signed"] = true
-	newSession.Data["userId"] = 558
+	newSession.Data.Value["signed"] = true
+	newSession.Data.Value["userId"] = 558
 	err = newSession.Save()
 	if err != nil {
 		t.Error(err)
 	}
+
+	time.Sleep(10 * time.Second)
+
 	// retrieve again
 	newSession = sessionManager.GetSession(session.ID)
+	if newSession.ID != session.ID {
+		t.Error("session expired")
+	}
+	oldSession := &ginsession.Session{}
+	oldSession.Update()
+
+	time.Sleep(1 * time.Second)
+
+	newSession = sessionManager.GetSession(session.ID)
 	t.Log(newSession)
+
+}
+
+func Test_copySession(t *testing.T) {
+	session := sessionManager.GetSession("aaa")
+	t.Log(session.ID)
+	oldSession := session.Copy()
+	if oldSession == nil {
+		t.Error("session.Copy() failed")
+	}
+	session.Data.Value["test"] = "OK"
+	session.Update()
+	t.Log(oldSession)
+	t.Log(session)
+}
+
+func Test_shouldUpdate(t *testing.T) {
+	session := sessionManager.GetSession("aaa")
+	t.Log(session.ID)
+	oldSession := session.Copy()
+	if oldSession == nil {
+		t.Error("session.Copy() failed")
+	}
+	session.Data.Value["test"] = "OK"
+	if session.ShouldUpdate(oldSession) {
+		t.Error("should not update")
+	}
+	session.Update()
+	if !session.ShouldUpdate(oldSession) {
+		t.Error("should update")
+	}
+}
+
+func Test_shouldKeepAlive(t *testing.T) {
+	session := sessionManager.GetSession("aaa")
+	t.Log(session.ID)
+	oldSession := session.Copy()
+	if oldSession == nil {
+		t.Error("session.Copy() failed")
+	}
+	session.Data.Value["test"] = "OK"
+	if session.ShouldUpdate(oldSession) {
+		t.Error("should not update")
+	}
+	time.Sleep(10 * time.Second) // 60 = 配置里的maxAge
+	if !session.ShouldUpdate(oldSession) {
+		t.Error("should update")
+	}
 }
