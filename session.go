@@ -240,11 +240,8 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 
-		// create session
-		sid, err := c.Cookie(sessionManager.cookieName)
-		if err != nil {
-			log.Println(err)
-		}
+		// get or create session
+		sid, _ := c.Cookie(sessionManager.cookieName)
 		session := sessionManager.GetSession(sid)
 		c.Set("session", session)
 
