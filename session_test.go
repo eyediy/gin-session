@@ -75,9 +75,15 @@ func Test_saveSession(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+	var sessionID = session.ID
+	session = sessionManager.GetSession(sessionID)
+	if session.ID != sessionID {
+		t.Error("not match, get session failed")
+	}
 }
 
 func Test_completeFlow(t *testing.T) {
+	t.SkipNow()
 	session := sessionManager.GetSession("aaa")
 	t.Log(session.ID)
 	err := session.Save()
@@ -127,24 +133,29 @@ func Test_copySession(t *testing.T) {
 
 func Test_shouldUpdate(t *testing.T) {
 	session := sessionManager.GetSession("aaa")
-	t.Log(session.ID)
 	oldSession := session.Copy()
 	if oldSession == nil {
 		t.Error("session.Copy() failed")
-	}
-	session.Data.Value["test"] = "OK"
-	if session.ShouldUpdate(oldSession) {
-		t.Error("should not update")
 	}
 	session.Update()
 	if !session.ShouldUpdate(oldSession) {
 		t.Error("should update")
 	}
+	oldSession = session.Copy()
+	session.Data.Value["test"] = "OK"
+	t.Log(session)
+	t.Log(oldSession)
+	if session.ShouldUpdate(oldSession) {
+		t.Error("should not update")
+	}
 }
 
 func Test_shouldKeepAlive(t *testing.T) {
-	session := sessionManager.GetSession("aaa")
+	session := sessionManager.GetSession("")
 	t.Log(session.ID)
+	if session.Cookie == "" {
+		session.Save()
+	}
 	oldSession := session.Copy()
 	if oldSession == nil {
 		t.Error("session.Copy() failed")
@@ -153,8 +164,14 @@ func Test_shouldKeepAlive(t *testing.T) {
 	if session.ShouldUpdate(oldSession) {
 		t.Error("should not update")
 	}
-	time.Sleep(10 * time.Second) // 60 = 配置里的maxAge
+	time.Sleep(5 * time.Second)
 	if !session.ShouldUpdate(oldSession) {
 		t.Error("should update")
+	}
+	time.Sleep(5 * time.Second)
+	session = sessionManager.GetSession(session.ID)
+	t.Log(session)
+	if session.ID == session.Cookie {
+		t.Error("session should be expired")
 	}
 }

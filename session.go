@@ -15,6 +15,11 @@ import (
 	"github.com/magiconair/properties"
 )
 
+const (
+	// 网络延迟,会话保活时间应该加上网络延迟
+	sessionDelay = 5
+)
+
 // SessionData .
 type SessionData struct {
 	LastUpdate int64
@@ -24,6 +29,7 @@ type SessionData struct {
 // Session defines common session info
 type Session struct {
 	ID      string
+	Cookie  string // original session ID
 	Data    SessionData
 	Valid   bool
 	manager *SessionManager
@@ -34,20 +40,22 @@ type Session struct {
 // return nil otherwise
 func (session *Session) Copy() *Session {
 	newSession := new(Session)
-	// ID
-	newSession.ID = session.ID
-	// Data
-	bytes, err := json.Marshal(&session.Data)
+	bytes, err := json.Marshal(&session)
 	if err != nil {
 		return nil
 	}
-	err = json.Unmarshal(bytes, &newSession.Data)
+	err = json.Unmarshal(bytes, &newSession)
 	if err != nil {
 		return nil
 	}
-	// manager
+	// unexported members
 	newSession.manager = session.manager
 	return newSession
+}
+
+// SaveCookie .
+func (session *Session) SaveCookie(c *gin.Context) {
+	session.manager.SaveCookie(session, c)
 }
 
 // Save save session to store
@@ -66,6 +74,7 @@ func (session *Session) Update() {
 // return true if elapsed time is as long as maxAge-maxAgeTolerance
 func (session *Session) ShouldUpdate(oldSession *Session) bool {
 	if session.Data.LastUpdate != oldSession.Data.LastUpdate {
+		log.Println("session changed")
 		return true
 	}
 	return session.manager.shouldUpdate(session)
@@ -74,30 +83,42 @@ func (session *Session) ShouldUpdate(oldSession *Session) bool {
 // SessionManager use to manage sessions
 type SessionManager struct {
 	// cookie
-	cookieName           string
-	maxAge               int
-	maxAgeUpdateInterval int
-	path                 string
-	domain               string
-	secure               bool
-	httpOnly             bool
+	cookieName string
+	maxAge     int
+	path       string
+	domain     string
+	secure     bool
+	httpOnly   bool
 	// key prefix used in store
 	keyPrefix string
 	// redis
 	client *redis.Client
 }
 
-// sessionKey
-func (manager *SessionManager) sessionKey(sid string) string {
+// MaxAge get logical maxAge
+func (manager *SessionManager) MaxAge() int {
+	maxAge := manager.maxAge
+	if maxAge > 0 {
+		maxAge += sessionDelay
+	}
+	return maxAge
+}
+
+// SessionKey .
+func (manager *SessionManager) SessionKey(sid string) string {
 	return manager.keyPrefix + ":" + sid
 }
 
 // shouldUpdate .
 // return true if time.Now().UnixNano() - session.Data.LastUpdate > maxAge
 func (manager *SessionManager) shouldUpdate(session *Session) bool {
+	if manager.maxAge == 0 {
+		return false
+	}
 	tElapsed := time.Now().UnixNano() - session.Data.LastUpdate
-	maxAgeUpdateInterval := time.Duration(manager.maxAgeUpdateInterval) * time.Second
-	if tElapsed >= int64(maxAgeUpdateInterval) {
+	updateInterval := time.Duration(manager.maxAge-sessionDelay) * time.Second
+	if tElapsed >= int64(updateInterval) {
+		log.Print("update")
 		return true
 	}
 	return false
@@ -111,27 +132,25 @@ func (manager *SessionManager) SaveCookie(session *Session, c *gin.Context) {
 	cookie := &http.Cookie{
 		Name:     manager.cookieName,
 		Value:    url.QueryEscape(session.ID),
-		MaxAge:   manager.maxAge,
+		MaxAge:   manager.MaxAge(),
 		Path:     manager.path,
 		Domain:   manager.domain,
 		Secure:   manager.secure,
 		HttpOnly: manager.httpOnly,
 	}
-	//log.Println(cookie.String())
 	http.SetCookie(c.Writer, cookie)
 }
 
 // Save save session to store
 func (manager *SessionManager) Save(session *Session) error {
-	var (
-		err   error
-		bytes []byte
-	)
-	bytes, err = json.Marshal(&session.Data)
+	session.Update()
+	bytes, err := json.Marshal(&session.Data)
 	if err != nil {
 		return err
 	}
-	statusCmd := manager.client.Set(manager.sessionKey(session.ID), string(bytes), time.Duration(manager.maxAge)*time.Second)
+	statusCmd := manager.client.Set(manager.SessionKey(session.ID),
+		string(bytes),
+		time.Duration(manager.MaxAge())*time.Second)
 	if statusCmd.Err() != nil {
 		return statusCmd.Err()
 	}
@@ -145,13 +164,14 @@ func (manager *SessionManager) GetSession(sid string) *Session {
 	)
 	session := &Session{
 		"",
+		sid,
 		SessionData{
 			time.Now().UnixNano(),
 			make(map[string]interface{}),
 		},
 		false,
 		manager}
-	strCmd := manager.client.Get(manager.sessionKey(sid))
+	strCmd := manager.client.Get(manager.SessionKey(sid))
 	if strCmd.Err() == nil {
 		err = json.Unmarshal([]byte(strCmd.Val()), &session.Data)
 		if err == nil {
@@ -181,7 +201,6 @@ func NewSessionManager(propfile string) *SessionManager {
 	// load session config
 	sessionManager.cookieName = p.GetString("session.cookieName", "gin-session")
 	sessionManager.maxAge = p.GetInt("session.maxAge", 0)
-	sessionManager.maxAgeUpdateInterval = p.GetInt("session.maxAgeUpdateInterval", 0)
 	sessionManager.path = p.GetString("session.path", "/")
 	sessionManager.domain = p.GetString("session.domain", "")
 	sessionManager.secure = p.GetBool("session.secure", false)
@@ -210,6 +229,12 @@ func NewSessionManager(propfile string) *SessionManager {
 	return sessionManager
 }
 
+// GetSession return a pointer to ginsession.Session
+func GetSession(c *gin.Context) *Session {
+	customField, _ := c.Get("session")
+	return customField.(*Session)
+}
+
 // SessionMiddleware return a gin handler
 // propfile - properties file used for customized configuration
 func SessionMiddleware(propfile string) gin.HandlerFunc {
@@ -224,12 +249,15 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 			log.Println(err)
 		}
 		session := sessionManager.GetSession(sid)
-		if session != nil {
-			c.Set("session", session)
-		}
+		c.Set("session", session)
 
 		// update cookie
-		sessionManager.SaveCookie(session, c)
+		if session.ID == session.Cookie {
+			if sessionManager.shouldUpdate(session) {
+				log.Println("update cookie")
+				sessionManager.SaveCookie(session, c)
+			}
+		}
 
 		// save a copy of session
 		oldSession := session.Copy()
@@ -241,8 +269,6 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 
 		// save session
 		if session.ShouldUpdate(oldSession) {
-			log.Println("update")
-			session.Update() // keepalive
 			session.Save()
 		}
 	}
