@@ -22,34 +22,40 @@ const (
 
 // SessionData .
 type SessionData struct {
-	LastUpdate int64
-	Value      map[string]interface{}
+	LastUpdate       int                    `json:"u"`
+	LastCookieUpdate int                    `json:"c"`
+	Value            map[string]interface{} `json:"v"`
 }
 
 // Session defines common session info
 type Session struct {
 	ID      string
-	OID     string // original session ID
+	Cookie  string
 	Data    SessionData
 	manager *SessionManager
+}
+
+// Expired .
+func (session *Session) Expired() bool {
+	return session.ID == "" && session.Cookie != ""
 }
 
 // Copy copy a session instance
 // return *Session if succeed
 // return nil otherwise
-func (session *Session) Copy() *Session {
+func (session *Session) Copy() (*Session, error) {
 	newSession := new(Session)
 	bytes, err := json.Marshal(&session)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	err = json.Unmarshal(bytes, &newSession)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	// unexported members
 	newSession.manager = session.manager
-	return newSession
+	return newSession, nil
 }
 
 // SaveCookie .
@@ -62,20 +68,15 @@ func (session *Session) Save() error {
 	return session.manager.Save(session)
 }
 
-// Update force the update the session state
-func (session *Session) Update() {
-	session.Data.LastUpdate = time.Now().UnixNano()
+// Destroy delete session
+func (session *Session) Destroy() error {
+	return session.manager.destroy(session)
 }
 
 // ShouldUpdate .
 // check session state
-// return true if session.Data.LastUpdate had been modified
 // return true if elapsed time is as long as maxAge-maxAgeTolerance
-func (session *Session) ShouldUpdate(oldSession *Session) bool {
-	if session.Data.LastUpdate != oldSession.Data.LastUpdate {
-		log.Println("session changed")
-		return true
-	}
+func (session *Session) ShouldUpdate() bool {
 	return session.manager.shouldUpdate(session)
 }
 
@@ -103,35 +104,49 @@ func (manager *SessionManager) MaxAge() int {
 	return maxAge
 }
 
-// SessionKey .
-func (manager *SessionManager) SessionKey(sid string) string {
-	return manager.keyPrefix + ":" + sid
-}
-
-// shouldUpdate .
-// return true if time.Now().UnixNano() - session.Data.LastUpdate > maxAge
-func (manager *SessionManager) shouldUpdate(session *Session) bool {
-	if manager.maxAge == 0 {
-		return false
-	}
-	tElapsed := time.Now().UnixNano() - session.Data.LastUpdate
-	updateInterval := time.Duration(manager.maxAge-sessionDelay) * time.Second
-	if tElapsed >= int64(updateInterval) {
-		log.Print("update")
+func (manager *SessionManager) expired(session *Session) bool {
+	tElapsed := time.Now().Unix() - int64(session.Data.LastUpdate)
+	if tElapsed >= int64(manager.maxAge) {
 		return true
 	}
 	return false
 }
 
+func (manager *SessionManager) sessionKey(sid string) string {
+	return manager.keyPrefix + ":" + sid
+}
+
+func (manager *SessionManager) shouldUpdate(session *Session) bool {
+	if manager.maxAge == 0 {
+		return false
+	}
+	tElapsed := time.Now().Unix() - int64(session.Data.LastCookieUpdate)
+	if tElapsed >= int64(manager.maxAge) {
+		return true
+	}
+	return false
+}
+
+func (manager *SessionManager) destroy(session *Session) error {
+	cmd := manager.client.Del(manager.sessionKey(session.ID))
+	return cmd.Err()
+}
+
 // SaveCookie save cookie to client
 func (manager *SessionManager) SaveCookie(session *Session, c *gin.Context) {
-	if manager.domain == "" {
-		manager.domain = c.Request.Host
+	session.Data.LastCookieUpdate = int(time.Now().Unix())
+	err := manager.Generate(session)
+	if err != nil {
+		log.Print(err)
+	}
+	maxAge := manager.MaxAge()
+	if maxAge > 0 {
+		maxAge *= 2
 	}
 	cookie := &http.Cookie{
 		Name:     manager.cookieName,
 		Value:    url.QueryEscape(session.ID),
-		MaxAge:   manager.MaxAge(),
+		MaxAge:   maxAge,
 		Path:     manager.path,
 		Domain:   manager.domain,
 		Secure:   manager.secure,
@@ -140,14 +155,34 @@ func (manager *SessionManager) SaveCookie(session *Session, c *gin.Context) {
 	http.SetCookie(c.Writer, cookie)
 }
 
+// Generate session id
+func (manager *SessionManager) Generate(session *Session) error {
+	if session.ID == "" {
+		var err error
+		session.ID, err = uuid.GenerateV4String()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Save save session to store
 func (manager *SessionManager) Save(session *Session) error {
-	session.Update()
-	bytes, err := json.Marshal(&session.Data)
+	var (
+		bytes []byte
+		err   error
+	)
+	session.Data.LastUpdate = int(time.Now().Unix())
+	err = manager.Generate(session)
 	if err != nil {
 		return err
 	}
-	statusCmd := manager.client.Set(manager.SessionKey(session.ID),
+	bytes, err = json.Marshal(&session.Data)
+	if err != nil {
+		return err
+	}
+	statusCmd := manager.client.Set(manager.sessionKey(session.ID),
 		string(bytes),
 		time.Duration(manager.MaxAge())*time.Second)
 	if statusCmd.Err() != nil {
@@ -165,25 +200,20 @@ func (manager *SessionManager) GetSession(sid string) *Session {
 		"",
 		sid,
 		SessionData{
-			time.Now().UnixNano(),
+			int(time.Now().Unix()),
+			int(time.Now().Unix()),
 			make(map[string]interface{}),
 		},
 		manager}
-	strCmd := manager.client.Get(manager.SessionKey(sid))
+	strCmd := manager.client.Get(manager.sessionKey(sid))
 	if strCmd.Err() == nil {
 		err = json.Unmarshal([]byte(strCmd.Val()), &session.Data)
 		if err == nil {
+			if manager.expired(session) {
+				return session
+			}
 			session.ID = sid
 			return session
-		}
-	}
-	// generate new session id
-	if session.ID == "" {
-		//session.ID = betterguid.New()
-		session.ID, err = uuid.GenerateV4String()
-		if err != nil {
-			session.ID = ""
-			log.Print(err)
 		}
 	}
 	return session
@@ -246,24 +276,28 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 		c.Set("session", session)
 
 		// update cookie
-		if session.ID == session.OID {
-			if sessionManager.shouldUpdate(session) {
-				log.Println("update cookie")
-				sessionManager.SaveCookie(session, c)
-			}
-		}
+		if session.Expired() {
 
-		// save a copy of session
-		oldSession := session.Copy()
-		if oldSession == nil {
-			log.Println("[gin-session]: session.Copy() failed")
+		} else {
+			if session.ID != "" && session.ID == session.Cookie {
+				if sessionManager.shouldUpdate(session) {
+					sessionManager.SaveCookie(session, c)
+				}
+			}
 		}
 
 		c.Next()
 
 		// save session
-		if session.ShouldUpdate(oldSession) {
-			session.Save()
+		if session.Expired() {
+			session.Destroy()
+		} else {
+			if session.ID != "" {
+				err := session.Save()
+				if err != nil {
+					log.Print(err)
+				}
+			}
 		}
 	}
 }

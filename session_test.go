@@ -3,7 +3,6 @@ package ginsession_test
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	ginsession "github.com/eyediy/gin-session"
 )
@@ -59,119 +58,32 @@ func Test_json(t *testing.T) {
 	t.Log(ss)
 }
 
-func Test_getSession(t *testing.T) {
-	t.Log(sessionManager)
-	if sessionManager == nil {
-		t.Error("sessionManager failed")
-	}
-	session := sessionManager.GetSession("jkkaa")
-	t.Log(session.ID)
-}
-
-func Test_saveSession(t *testing.T) {
-	session := sessionManager.GetSession("aaa")
-	t.Log(session.ID)
-	err := session.Save()
-	if err != nil {
-		t.Error(err)
-	}
-	var sessionID = session.ID
-	session = sessionManager.GetSession(sessionID)
-	if session.ID != sessionID {
-		t.Error("not match, get session failed")
-	}
-}
-
-func Test_completeFlow(t *testing.T) {
-	t.SkipNow()
-	session := sessionManager.GetSession("aaa")
-	t.Log(session.ID)
-	err := session.Save()
-	if err != nil {
-		t.Error(err)
-	}
-	// retrieve the session
-	newSession := sessionManager.GetSession(session.ID)
-	t.Log(newSession)
-	// bind some data
-	newSession.Data.Value["signed"] = true
-	newSession.Data.Value["userId"] = 558
-	err = newSession.Save()
-	if err != nil {
-		t.Error(err)
-	}
-
-	time.Sleep(10 * time.Second)
-
-	// retrieve again
-	newSession = sessionManager.GetSession(session.ID)
-	if newSession.ID != session.ID {
-		t.Error("session expired")
-	}
-	oldSession := &ginsession.Session{}
-	oldSession.Update()
-
-	time.Sleep(1 * time.Second)
-
-	newSession = sessionManager.GetSession(session.ID)
-	t.Log(newSession)
-
-}
-
-func Test_copySession(t *testing.T) {
-	session := sessionManager.GetSession("aaa")
-	t.Log(session.ID)
-	oldSession := session.Copy()
-	if oldSession == nil {
-		t.Error("session.Copy() failed")
-	}
-	session.Data.Value["test"] = "OK"
-	session.Update()
-	t.Log(oldSession)
-	t.Log(session)
-}
-
-func Test_shouldUpdate(t *testing.T) {
-	session := sessionManager.GetSession("aaa")
-	oldSession := session.Copy()
-	if oldSession == nil {
-		t.Error("session.Copy() failed")
-	}
-	session.Update()
-	if !session.ShouldUpdate(oldSession) {
-		t.Error("should update")
-	}
-	oldSession = session.Copy()
-	session.Data.Value["test"] = "OK"
-	t.Log(session)
-	t.Log(oldSession)
-	if session.ShouldUpdate(oldSession) {
-		t.Error("should not update")
-	}
-}
-
-func Test_shouldKeepAlive(t *testing.T) {
+func Test_sessionAccess(t *testing.T) {
 	session := sessionManager.GetSession("")
-	t.Log(session.ID)
-	if session.OID == "" {
-		session.Save()
+	if session.Cookie != "" {
+		t.Error("session.Cookie should be empty!")
 	}
-	oldSession := session.Copy()
-	if oldSession == nil {
-		t.Error("session.Copy() failed")
+	if session.ID != "" {
+		t.Error("session.ID should be empty")
 	}
-	session.Data.Value["test"] = "OK"
-	if session.ShouldUpdate(oldSession) {
-		t.Error("should not update")
+	err := session.Save()
+	if err != nil {
+		t.Error(err)
 	}
-	time.Sleep(5 * time.Second)
-	if !session.ShouldUpdate(oldSession) {
-		t.Error("should update")
+	oSession, _ := session.Copy()
+	t.Log(oSession)
+	session = sessionManager.GetSession(oSession.ID)
+	if session.ID != oSession.ID {
+		t.Error("cannot get session")
 	}
-	time.Sleep(5 * time.Second)
-	session = sessionManager.GetSession(session.ID)
 	t.Log(session)
-	if session.ID == session.OID {
-		t.Error("session should be expired")
+	err = session.Destroy()
+	if err != nil {
+		t.Error(err)
+	}
+	session = sessionManager.GetSession(oSession.ID)
+	t.Log(session)
+	if session.ID != "" {
+		t.Error("session should be empty")
 	}
 }
