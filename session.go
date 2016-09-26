@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	// SessionName .
+	SessionName = "session"
 	// 网络延迟,会话保活时间应该加上网络延迟
 	sessionDelay = 5
 )
@@ -258,7 +260,7 @@ func NewSessionManager(propfile string) *SessionManager {
 
 // GetSession return a pointer to ginsession.Session
 func GetSession(c *gin.Context) *Session {
-	customField, _ := c.Get("session")
+	customField, _ := c.Get(SessionName)
 	return customField.(*Session)
 }
 
@@ -273,7 +275,7 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 		// get or create session
 		sid, _ := c.Cookie(sessionManager.cookieName)
 		session := sessionManager.GetSession(sid)
-		c.Set("session", session)
+		c.Set(SessionName, session)
 
 		// update cookie
 		if session.Expired() {
