@@ -153,7 +153,7 @@ func Test_shouldUpdate(t *testing.T) {
 func Test_shouldKeepAlive(t *testing.T) {
 	session := sessionManager.GetSession("")
 	t.Log(session.ID)
-	if session.Cookie == "" {
+	if session.OID == "" {
 		session.Save()
 	}
 	oldSession := session.Copy()
@@ -171,7 +171,7 @@ func Test_shouldKeepAlive(t *testing.T) {
 	time.Sleep(5 * time.Second)
 	session = sessionManager.GetSession(session.ID)
 	t.Log(session)
-	if session.ID == session.Cookie {
+	if session.ID == session.OID {
 		t.Error("session should be expired")
 	}
 }

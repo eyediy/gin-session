@@ -29,9 +29,8 @@ type SessionData struct {
 // Session defines common session info
 type Session struct {
 	ID      string
-	Cookie  string // original session ID
+	OID     string // original session ID
 	Data    SessionData
-	Valid   bool
 	manager *SessionManager
 }
 
@@ -169,14 +168,12 @@ func (manager *SessionManager) GetSession(sid string) *Session {
 			time.Now().UnixNano(),
 			make(map[string]interface{}),
 		},
-		false,
 		manager}
 	strCmd := manager.client.Get(manager.SessionKey(sid))
 	if strCmd.Err() == nil {
 		err = json.Unmarshal([]byte(strCmd.Val()), &session.Data)
 		if err == nil {
 			session.ID = sid
-			session.Valid = true
 			return session
 		}
 	}
@@ -252,7 +249,7 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 		c.Set("session", session)
 
 		// update cookie
-		if session.ID == session.Cookie {
+		if session.ID == session.OID {
 			if sessionManager.shouldUpdate(session) {
 				log.Println("update cookie")
 				sessionManager.SaveCookie(session, c)
