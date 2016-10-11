@@ -87,17 +87,6 @@ func (session *Session) Destroy() error {
 	return session.manager.destroy(session)
 }
 
-// CheckTTL 检查会话存活时间
-// return:
-//	true - 需要更新
-//	false - 不需要
-func (session *Session) CheckTTL() bool {
-	if session.Update {
-		return true
-	}
-	return session.manager.checkTTL(session)
-}
-
 // SessionManager use to manage sessions
 type SessionManager struct {
 	// cookie
@@ -134,16 +123,6 @@ func (manager *SessionManager) expired(session *Session) bool {
 
 func (manager *SessionManager) sessionKey(sid string) string {
 	return manager.keyPrefix + ":" + sid
-}
-
-func (manager *SessionManager) checkTTL(session *Session) bool {
-	if manager.ttl > 0 {
-		tElapsed := time.Now().Unix() - int64(session.Data.LastUpdate)
-		if tElapsed >= int64(manager.ttl) {
-			return true
-		}
-	}
-	return false
 }
 
 func (manager *SessionManager) destroy(session *Session) error {
@@ -276,15 +255,14 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 		c.Next()
 
 		// save session
-		if session.Expired() {
-			session.Destroy()
-		} else {
-			if session.CheckTTL() {
+		if session.ID != "" {
+			if !session.Expired() {
 				err := session.Save()
 				if err != nil {
 					log.Print(err)
 				}
 			}
 		}
+
 	}
 }
