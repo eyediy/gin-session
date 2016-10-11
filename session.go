@@ -229,7 +229,7 @@ func NewSessionManager(propfile string) *SessionManager {
 	sessionManager.keyPrefix = p.GetString("session.keyPrefix", sessionManager.cookieName)
 
 	// TTL
-	sessionManager.ttl = p.GetInt("session.store.ttl", 0)
+	sessionManager.ttl = p.GetInt("session.store.ttl", 3600)
 
 	// load storage config
 
