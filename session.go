@@ -24,22 +24,16 @@ const (
 
 // SessionData .
 type SessionData struct {
-	LastUpdate       int                    `json:"u"`
-	LastCookieUpdate int                    `json:"c"`
-	Value            map[string]interface{} `json:"v"`
+	LastUpdate int                    `json:"u"`
+	Value      map[string]interface{} `json:"v"`
 }
 
 // Session defines common session info
 type Session struct {
 	ID      string
-	Cookie  string
 	Data    SessionData
+	Update  bool
 	manager *SessionManager
-}
-
-// Expired .
-func (session *Session) Expired() bool {
-	return session.ID == "" && session.Cookie != ""
 }
 
 // Copy copy a session instance
@@ -60,7 +54,25 @@ func (session *Session) Copy() (*Session, error) {
 	return newSession, nil
 }
 
-// SaveCookie .
+// Alloc generate new session ID
+func (session *Session) Alloc() error {
+	session.Update = true
+	if session.ID == "" {
+		var err error
+		session.ID, err = uuid.GenerateV4String()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Expired 检查是否过期
+func (session *Session) Expired() bool {
+	return session.manager.expired(session)
+}
+
+// SaveCookie set cookie
 func (session *Session) SaveCookie(c *gin.Context) {
 	session.manager.SaveCookie(session, c)
 }
@@ -75,11 +87,15 @@ func (session *Session) Destroy() error {
 	return session.manager.destroy(session)
 }
 
-// ShouldUpdate .
-// check session state
-// return true if elapsed time is as long as maxAge-maxAgeTolerance
-func (session *Session) ShouldUpdate() bool {
-	return session.manager.shouldUpdate(session)
+// CheckTTL 检查会话存活时间
+// return:
+//	true - 需要更新
+//	false - 不需要
+func (session *Session) CheckTTL() bool {
+	if session.Update {
+		return true
+	}
+	return session.manager.checkTTL(session)
 }
 
 // SessionManager use to manage sessions
@@ -93,23 +109,25 @@ type SessionManager struct {
 	httpOnly   bool
 	// key prefix used in store
 	keyPrefix string
+	// store
+	ttl int
 	// redis
 	client *redis.Client
 }
 
-// MaxAge get logical maxAge
-func (manager *SessionManager) MaxAge() int {
-	maxAge := manager.maxAge
-	if maxAge > 0 {
-		maxAge += sessionDelay
+func (manager *SessionManager) getSessionDuration() int {
+	if manager.ttl > 0 {
+		return manager.ttl + sessionDelay
 	}
-	return maxAge
+	return manager.ttl
 }
 
 func (manager *SessionManager) expired(session *Session) bool {
-	tElapsed := time.Now().Unix() - int64(session.Data.LastUpdate)
-	if tElapsed >= int64(manager.maxAge) {
-		return true
+	if manager.maxAge > 0 {
+		tElapsed := time.Now().Unix() - int64(session.Data.LastUpdate)
+		if tElapsed >= int64(manager.maxAge) {
+			return true
+		}
 	}
 	return false
 }
@@ -118,13 +136,12 @@ func (manager *SessionManager) sessionKey(sid string) string {
 	return manager.keyPrefix + ":" + sid
 }
 
-func (manager *SessionManager) shouldUpdate(session *Session) bool {
-	if manager.maxAge == 0 {
-		return false
-	}
-	tElapsed := time.Now().Unix() - int64(session.Data.LastCookieUpdate)
-	if tElapsed >= int64(manager.maxAge) {
-		return true
+func (manager *SessionManager) checkTTL(session *Session) bool {
+	if manager.ttl > 0 {
+		tElapsed := time.Now().Unix() - int64(session.Data.LastUpdate)
+		if tElapsed >= int64(manager.ttl) {
+			return true
+		}
 	}
 	return false
 }
@@ -136,37 +153,20 @@ func (manager *SessionManager) destroy(session *Session) error {
 
 // SaveCookie save cookie to client
 func (manager *SessionManager) SaveCookie(session *Session, c *gin.Context) {
-	session.Data.LastCookieUpdate = int(time.Now().Unix())
-	err := manager.Generate(session)
+	err := session.Alloc()
 	if err != nil {
 		log.Print(err)
-	}
-	maxAge := manager.MaxAge()
-	if maxAge > 0 {
-		maxAge *= 2
 	}
 	cookie := &http.Cookie{
 		Name:     manager.cookieName,
 		Value:    url.QueryEscape(session.ID),
-		MaxAge:   maxAge,
+		MaxAge:   0,
 		Path:     manager.path,
 		Domain:   manager.domain,
 		Secure:   manager.secure,
 		HttpOnly: manager.httpOnly,
 	}
 	http.SetCookie(c.Writer, cookie)
-}
-
-// Generate session id
-func (manager *SessionManager) Generate(session *Session) error {
-	if session.ID == "" {
-		var err error
-		session.ID, err = uuid.GenerateV4String()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Save save session to store
@@ -176,17 +176,13 @@ func (manager *SessionManager) Save(session *Session) error {
 		err   error
 	)
 	session.Data.LastUpdate = int(time.Now().Unix())
-	err = manager.Generate(session)
-	if err != nil {
-		return err
-	}
 	bytes, err = json.Marshal(&session.Data)
 	if err != nil {
 		return err
 	}
 	statusCmd := manager.client.Set(manager.sessionKey(session.ID),
 		string(bytes),
-		time.Duration(manager.MaxAge())*time.Second)
+		time.Duration(manager.getSessionDuration())*time.Second)
 	if statusCmd.Err() != nil {
 		return statusCmd.Err()
 	}
@@ -200,20 +196,16 @@ func (manager *SessionManager) GetSession(sid string) *Session {
 	)
 	session := &Session{
 		"",
-		sid,
 		SessionData{
-			int(time.Now().Unix()),
 			int(time.Now().Unix()),
 			make(map[string]interface{}),
 		},
+		false,
 		manager}
 	strCmd := manager.client.Get(manager.sessionKey(sid))
 	if strCmd.Err() == nil {
 		err = json.Unmarshal([]byte(strCmd.Val()), &session.Data)
 		if err == nil {
-			if manager.expired(session) {
-				return session
-			}
 			session.ID = sid
 			return session
 		}
@@ -236,7 +228,11 @@ func NewSessionManager(propfile string) *SessionManager {
 	sessionManager.httpOnly = p.GetBool("session.httpOnly", false)
 	sessionManager.keyPrefix = p.GetString("session.keyPrefix", sessionManager.cookieName)
 
+	// TTL
+	sessionManager.ttl = p.GetInt("session.store.ttl", 0)
+
 	// load storage config
+
 	host := p.GetString("session.store.host", "")
 	port := p.GetInt("session.store.port", 6379)
 	pass := p.GetString("session.store.pass", "")
@@ -277,24 +273,13 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 		session := sessionManager.GetSession(sid)
 		c.Set(SessionName, session)
 
-		// update cookie
-		if session.Expired() {
-
-		} else {
-			if session.ID != "" && session.ID == session.Cookie {
-				if sessionManager.shouldUpdate(session) {
-					sessionManager.SaveCookie(session, c)
-				}
-			}
-		}
-
 		c.Next()
 
 		// save session
 		if session.Expired() {
 			session.Destroy()
 		} else {
-			if session.ID != "" {
+			if session.CheckTTL() {
 				err := session.Save()
 				if err != nil {
 					log.Print(err)

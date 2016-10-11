@@ -59,14 +59,15 @@ func Test_json(t *testing.T) {
 }
 
 func Test_sessionAccess(t *testing.T) {
+	var (
+		err error
+	)
 	session := sessionManager.GetSession("")
-	if session.Cookie != "" {
-		t.Error("session.Cookie should be empty!")
-	}
 	if session.ID != "" {
 		t.Error("session.ID should be empty")
 	}
-	err := session.Save()
+	err = session.Alloc()
+	err = session.Save()
 	if err != nil {
 		t.Error(err)
 	}
