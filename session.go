@@ -10,7 +10,7 @@ import (
 
 	redis "gopkg.in/redis.v4"
 
-	"github.com/gin-gonic/gin"
+	"github.com/eyediy/gin"
 	"github.com/gokyle/uuid"
 	"github.com/magiconair/properties"
 )

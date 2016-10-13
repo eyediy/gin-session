@@ -12,7 +12,7 @@ var (
 )
 
 func init() {
-	sessionManager = ginsession.NewSessionManager("session.properties")
+	sessionManager = ginsession.NewSessionManager("session_test.properties")
 }
 
 type AAA struct {
