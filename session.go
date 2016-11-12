@@ -57,7 +57,7 @@ func (session *Session) Copy() (*Session, error) {
 // Alloc generate new session ID
 func (session *Session) Alloc() error {
 	session.Update = true
-	if session.ID == "" {
+	if !session.Valid() {
 		var err error
 		session.ID, err = uuid.GenerateV4String()
 		if err != nil {
@@ -65,6 +65,11 @@ func (session *Session) Alloc() error {
 		}
 	}
 	return nil
+}
+
+// Valid 检查有效性
+func (session *Session) Valid() bool {
+	return session.ID != ""
 }
 
 // Expired 检查是否过期
@@ -211,11 +216,12 @@ func NewSessionManager(propfile string) *SessionManager {
 	sessionManager.ttl = p.GetInt("session.store.ttl", 3600)
 
 	// load storage config
-
 	host := p.GetString("session.store.host", "")
 	port := p.GetInt("session.store.port", 6379)
 	pass := p.GetString("session.store.pass", "")
 	db := p.GetInt("session.store.db", 0)
+	dialTimeout := p.GetInt("session.store.dialTimeout", 60)
+	maxRetries := p.GetInt("session.store.maxRetries", 3)
 
 	// create redis client
 	addr := fmt.Sprintf("%s:%d", host, port)
@@ -224,6 +230,8 @@ func NewSessionManager(propfile string) *SessionManager {
 		Addr:     addr,
 		Password: pass,
 		DB:       db,
+		DialTimeout: time.Second*time.Duration(dialTimeout),
+		MaxRetries: maxRetries,
 	})
 	_, err := sessionManager.client.Ping().Result()
 	if err != nil {
@@ -255,7 +263,7 @@ func SessionMiddleware(propfile string) gin.HandlerFunc {
 		c.Next()
 
 		// save session
-		if session.ID != "" {
+		if session.Valid() {
 			if !session.Expired() {
 				err := session.Save()
 				if err != nil {
