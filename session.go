@@ -222,6 +222,7 @@ func NewSessionManager(propfile string) *SessionManager {
 	db := p.GetInt("session.store.db", 0)
 	dialTimeout := p.GetInt("session.store.dialTimeout", 60)
 	maxRetries := p.GetInt("session.store.maxRetries", 3)
+	ping := p.GetBool("session.store.ping", false)
 
 	// create redis client
 	addr := fmt.Sprintf("%s:%d", host, port)
@@ -233,9 +234,11 @@ func NewSessionManager(propfile string) *SessionManager {
 		DialTimeout: time.Second*time.Duration(dialTimeout),
 		MaxRetries: maxRetries,
 	})
-	_, err := sessionManager.client.Ping().Result()
-	if err != nil {
-		log.Panic(err)
+	if ping {
+		_, err := sessionManager.client.Ping().Result()
+		if err != nil {
+			log.Panic(err)
+		}
 	}
 
 	return sessionManager
