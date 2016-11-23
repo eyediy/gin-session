@@ -132,7 +132,12 @@ func (manager *SessionManager) sessionKey(sid string) string {
 
 func (manager *SessionManager) destroy(session *Session) error {
 	cmd := manager.client.Del(manager.sessionKey(session.ID))
-	return cmd.Err()
+	err := cmd.Err()
+	if err != nil {
+		return err
+	}
+	session.ID = ""
+	return nil
 }
 
 // SaveCookie save cookie to client
