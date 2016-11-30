@@ -32,8 +32,12 @@ type SessionData struct {
 type Session struct {
 	ID      string
 	Data    SessionData
-	Update  bool
 	manager *SessionManager
+}
+
+// Update update last activity
+func (session *Session) Update() {
+	session.Data.LastUpdate = int(time.Now().Unix())
 }
 
 // Copy copy a session instance
@@ -56,7 +60,7 @@ func (session *Session) Copy() (*Session, error) {
 
 // Alloc generate new session ID
 func (session *Session) Alloc() error {
-	session.Update = true
+	session.Update()
 	if !session.Valid() {
 		var err error
 		session.ID, err = uuid.GenerateV4String()
@@ -164,7 +168,7 @@ func (manager *SessionManager) Save(session *Session) error {
 		bytes []byte
 		err   error
 	)
-	session.Data.LastUpdate = int(time.Now().Unix())
+	session.Update()
 	bytes, err = json.Marshal(&session.Data)
 	if err != nil {
 		return err
