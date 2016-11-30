@@ -193,7 +193,6 @@ func (manager *SessionManager) GetSession(sid string) *Session {
 			int(time.Now().Unix()),
 			make(map[string]interface{}),
 		},
-		false,
 		manager}
 	strCmd := manager.client.Get(manager.sessionKey(sid))
 	if strCmd.Err() == nil {
