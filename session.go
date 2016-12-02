@@ -194,14 +194,17 @@ func (manager *SessionManager) GetSession(sid string) *Session {
 			make(map[string]interface{}),
 		},
 		manager}
-	strCmd := manager.client.Get(manager.sessionKey(sid))
-	if strCmd.Err() == nil {
-		err = json.Unmarshal([]byte(strCmd.Val()), &session.Data)
-		if err == nil {
-			session.ID = sid
-			return session
+	if sid != "" {
+		strCmd := manager.client.Get(manager.sessionKey(sid))
+		if strCmd.Err() == nil {
+			err = json.Unmarshal([]byte(strCmd.Val()), &session.Data)
+			if err == nil {
+				session.ID = sid
+				return session
+			}
 		}
 	}
+
 	return session
 }
 
