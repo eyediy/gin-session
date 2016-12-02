@@ -13,6 +13,7 @@ import (
 	"github.com/eyediy/gin"
 	"github.com/gokyle/uuid"
 	"github.com/magiconair/properties"
+	"os"
 )
 
 const (
@@ -63,7 +64,7 @@ func (session *Session) Alloc() error {
 	session.Update()
 	if !session.Valid() {
 		var err error
-		session.ID, err = uuid.GenerateV4String()
+		session.ID, err = session.manager.generateSID()
 		if err != nil {
 			return err
 		}
@@ -107,6 +108,7 @@ type SessionManager struct {
 	httpOnly   bool
 	// key prefix used in store
 	keyPrefix string
+	sidIndex int
 	// store
 	ttl int
 	// redis
@@ -128,6 +130,14 @@ func (manager *SessionManager) expired(session *Session) bool {
 		}
 	}
 	return false
+}
+
+func (manager *SessionManager) generateSID() (string, error) {
+	guid, err := uuid.GenerateV4String()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d-%s", manager.sidIndex, guid), nil
 }
 
 func (manager *SessionManager) sessionKey(sid string) string {
@@ -222,6 +232,7 @@ func NewSessionManager(propfile string) *SessionManager {
 	sessionManager.secure = p.GetBool("session.secure", false)
 	sessionManager.httpOnly = p.GetBool("session.httpOnly", false)
 	sessionManager.keyPrefix = p.GetString("session.keyPrefix", sessionManager.cookieName)
+	sessionManager.sidIndex = p.GetInt("session.sidIndex", os.Getpid())
 
 	// TTL
 	sessionManager.ttl = p.GetInt("session.store.ttl", 3600)
